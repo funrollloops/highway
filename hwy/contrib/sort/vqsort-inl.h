@@ -1074,6 +1074,40 @@ HWY_NOINLINE void PrintMinMax(D d, Traits st, const T* HWY_RESTRICT keys,
   }
 }
 
+template<class D, class Traits, typename T>
+PivotResult ChoosePivot(D d, Traits st, T* HWY_RESTRICT keys,
+  size_t num, T* HWY_RESTRICT buf, Generator& rng, Vec<D>& pivot) {
+  DrawSamples(d, st, keys, num, buf, rng);
+  PivotResult result = PivotResult::kNormal;
+  if (HWY_UNLIKELY(UnsortedSampleEqual(d, st, buf))) {
+    pivot = st.SetKey(d, buf);
+    size_t idx_second = 0;
+    if (HWY_UNLIKELY(AllEqual(d, st, pivot, keys, num, &idx_second))) {
+      return PivotResult::kDone;
+    }
+    HWY_DASSERT(idx_second % st.LanesPerKey() == 0);
+
+    if (HWY_UNLIKELY(PartitionIfTwoKeys(d, st, pivot, keys, num,
+                                        idx_second, buf))) {
+      // Done, skip recursion because each side has all-equal keys.
+      return PivotResult::kDone;
+    }
+
+    // We can no longer start scanning from idx_second because
+    // PartitionIfTwoKeys may have reordered keys.
+    pivot = ChoosePivotForEqualSamples(d, st, keys, num, buf, result);
+  } else {
+    SortSamples(d, st, buf);
+
+    if (HWY_UNLIKELY(PartitionIfTwoSamples(d, st, keys, num, buf))) {
+      return PivotResult::kDone;
+    }
+
+    pivot = ChoosePivotByRank(d, st, buf);
+  }
+  return result;
+}
+
 template <class D, class Traits, typename T>
 HWY_NOINLINE void Recurse(D d, Traits st, T* HWY_RESTRICT keys,
                           T* HWY_RESTRICT keys_end, const size_t begin,
@@ -1094,35 +1128,8 @@ HWY_NOINLINE void Recurse(D d, Traits st, T* HWY_RESTRICT keys,
     PrintMinMax(d, st, keys + begin, num, buf);
   }
 
-  DrawSamples(d, st, keys + begin, num, buf, rng);
-
   Vec<D> pivot;
-  PivotResult result = PivotResult::kNormal;
-  if (HWY_UNLIKELY(UnsortedSampleEqual(d, st, buf))) {
-    pivot = st.SetKey(d, buf);
-    size_t idx_second = 0;
-    if (HWY_UNLIKELY(AllEqual(d, st, pivot, keys + begin, num, &idx_second))) {
-      return;
-    }
-    HWY_DASSERT(idx_second % st.LanesPerKey() == 0);
-
-    if (HWY_UNLIKELY(PartitionIfTwoKeys(d, st, pivot, keys + begin, num,
-                                        idx_second, buf))) {
-      return;  // Done, skip recursion because each side has all-equal keys.
-    }
-
-    // We can no longer start scanning from idx_second because
-    // PartitionIfTwoKeys may have reordered keys.
-    pivot = ChoosePivotForEqualSamples(d, st, keys + begin, num, buf, result);
-  } else {
-    SortSamples(d, st, buf);
-
-    if (HWY_UNLIKELY(PartitionIfTwoSamples(d, st, keys + begin, num, buf))) {
-      return;
-    }
-
-    pivot = ChoosePivotByRank(d, st, buf);
-  }
+  PivotResult result = ChoosePivot(d, st, keys + begin, num, buf, rng, pivot);
 
   // Too many recursions. This is unlikely to happen because we select pivots
   // from large (though still O(1)) samples.
@@ -1240,6 +1247,54 @@ void Sort(D d, Traits st, T* HWY_RESTRICT keys, size_t num,
     fprintf(stderr, "WARNING: using slow HeapSort because vqsort disabled\n");
   }
   return detail::HeapSort(st, keys, num);
+#endif  // VQSORT_ENABLED
+}
+
+// Partitions `keys[0..num-1]` such that for the returned split index `p`,
+// max(keys[0..p-1]) < min(keys[p..num-1]). Will take O(N) time.
+template <class D, class Traits, typename T>
+size_t Partition(D d, Traits st, T* HWY_RESTRICT keys, size_t num, T* HWY_RESTRICT buf) {
+  if (VQSORT_PRINT >= 1) {
+    fprintf(stderr, "=============== Partition num %zu\n", num);
+  }
+
+#if VQSORT_ENABLED || HWY_IDE
+#if !HWY_HAVE_SCALABLE
+  // On targets with fixed-size vectors, avoid _using_ the allocated memory.
+  // We avoid (potentially expensive for small input sizes) allocations on
+  // platforms where no targets are scalable. For 512-bit vectors, this fits on
+  // the stack (several KiB).
+  HWY_ALIGN T storage[SortConstants::BufNum<T>(HWY_LANES(T))] = {};
+  static_assert(sizeof(storage) <= 8192, "Unexpectedly large, check size");
+  buf = storage;
+#endif  // !HWY_HAVE_SCALABLE
+
+  if (detail::HandleSpecialCases(d, st, keys, num)) {
+    return num;  // Indicates the result is sorted.
+  }
+
+#if HWY_MAX_BYTES > 64
+  // sorting_networks-inl and traits assume no more than 512 bit vectors.
+  if (HWY_UNLIKELY(Lanes(d) > 64 / sizeof(T))) {
+    return Partition(CappedTag<T, 64 / sizeof(T)>(), st, keys, num, buf);
+  }
+#endif  // HWY_MAX_BYTES > 64
+
+  detail::Generator rng(keys, num);
+  Vec<D> pivot;
+  if (ChoosePivot(d, st, keys, num, buf, rng, pivot) ==
+      detail::PivotResult::kDone) {
+    return num;
+  }
+  return Partition(d, st, keys, 0, num, pivot, buf);
+#else
+  (void)d;
+  (void)buf;
+  if (VQSORT_PRINT >= 1) {
+    fprintf(stderr, "WARNING: using std::partition because vqsort disabled\n");
+  }
+  auto it = std::partition(keys, keys + num, keys[0]);
+  return it - keys;
 #endif  // VQSORT_ENABLED
 }
 

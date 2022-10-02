@@ -38,9 +38,7 @@ size_t PartitionI64Asc(int64_t* HWY_RESTRICT keys, size_t num,
                      int64_t* HWY_RESTRICT buf) {
   SortTag<int64_t> d;
   detail::SharedTraits<detail::TraitsLane<detail::OrderAscending<int64_t>>> st;
-  detail::Generator rng(keys, num);
-  const auto pivot = detail::ChoosePivot(d, st, keys, 0, num, buf, rng);
-  return Partition(d, st, keys, 0, num, pivot, buf);
+  return Partition(d, st, keys, num, buf);
 }
 
 // NOLINTNEXTLINE(google-readability-namespace-comments)
