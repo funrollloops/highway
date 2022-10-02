@@ -34,6 +34,15 @@ void SortI64Asc(int64_t* HWY_RESTRICT keys, size_t num,
   Sort(d, st, keys, num, buf);
 }
 
+size_t PartitionI64Asc(int64_t* HWY_RESTRICT keys, size_t num,
+                     int64_t* HWY_RESTRICT buf) {
+  SortTag<int64_t> d;
+  detail::SharedTraits<detail::TraitsLane<detail::OrderAscending<int64_t>>> st;
+  detail::Generator rng(keys, num);
+  const auto pivot = detail::ChoosePivot(d, st, keys, 0, num, buf, rng);
+  return Partition(d, st, keys, 0, num, pivot, buf);
+}
+
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace hwy
@@ -43,11 +52,16 @@ HWY_AFTER_NAMESPACE();
 namespace hwy {
 namespace {
 HWY_EXPORT(SortI64Asc);
+HWY_EXPORT(PartitionI64Asc);
 }  // namespace
 
 void Sorter::operator()(int64_t* HWY_RESTRICT keys, size_t n,
                         SortAscending) const {
   HWY_DYNAMIC_DISPATCH(SortI64Asc)(keys, n, Get<int64_t>());
+}
+
+size_t Sorter::Partition(int64_t* HWY_RESTRICT keys, size_t n, SortAscending) const {
+  return HWY_DYNAMIC_DISPATCH(PartitionI64Asc)(keys, n, Get<int64_t>());
 }
 
 }  // namespace hwy

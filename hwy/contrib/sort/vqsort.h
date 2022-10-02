@@ -88,6 +88,11 @@ class HWY_CONTRIB_DLLEXPORT Sorter {
   void operator()(K32V32* HWY_RESTRICT keys, size_t n, SortAscending) const;
   void operator()(K32V32* HWY_RESTRICT keys, size_t n, SortDescending) const;
 
+  // Chooses a pivot and partitions [0, n), returning the location of the split.
+  // Can be used to build a parallel sort. This API is unstable.
+  size_t Partition(int64_t* HWY_RESTRICT keys, size_t n, SortAscending) const;
+
+
   // For internal use only
   static void Fill24Bytes(const void* seed_heap, size_t seed_num, void* bytes);
   static bool HaveFloat64();
